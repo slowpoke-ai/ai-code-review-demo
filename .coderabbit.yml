@@ -1,0 +1,85 @@
+# CodeRabbit 配置文件
+# 等价于我们原来的 .cr-rules.yml，但由 CodeRabbit 平台读取
+# 文档：https://docs.coderabbit.ai/configure-coderabbit
+
+language: "zh-CN"
+
+# ── 审查触发配置 ────────────────────────────────────────────
+reviews:
+  # 自动对每个 PR 发起审查
+  auto_review:
+    enabled: true
+    drafts: false           # draft PR 不审查
+    # PR 标题包含以下关键词时跳过
+    ignore_title_keywords:
+      - "[skip ci]"
+      - "[no review]"
+      - "chore:"
+      - "docs:"
+      - "WIP"
+
+  # 跳过审查的文件路径（等价于 .cr-rules.yml 的 skip.paths）
+  path_filters:
+    - "!**/*.md"
+    - "!**/*.json"
+    - "!**/*.lock"
+    - "!.github/**"
+    - "!docs/**"
+
+  # 审查完成后的操作
+  # comment — 只评论，不 approve/request changes（推荐，让人工保留最终决定权）
+  # approve — 通过时自动 approve
+  review_status: "comment"
+
+  # 输出语言
+  poem: false               # 关闭 CodeRabbit 的彩蛋诗歌
+  collapse_walkthrough: false
+
+# ── Checklist 配置 ─────────────────────────────────────────
+# CodeRabbit 会自动生成 PR summary + Walkthrough + 行内 Checklist
+# 以下是自定义的审查重点（注入到 AI system prompt）
+custom_reviews:
+  - name: "安全检查"
+    description: |
+      重点检查以下安全问题：
+      - SQL 注入：禁止字符串拼接查询，必须使用参数化查询
+      - 硬编码密钥：任何 password/secret/token/key 不得硬编码
+      - 弱加密：密码哈希禁止使用 MD5/SHA1，必须使用 bcrypt/argon2
+      - eval() 或 Function() 执行用户输入
+      - 路径遍历：文件操作必须校验路径
+      - 缺少权限校验的 API 接口
+    severity: error
+
+  - name: "代码质量"
+    description: |
+      检查以下质量问题：
+      - 禁止使用 console.log（请使用 logger）
+      - 禁止使用 TypeScript any 类型
+      - 不允许空的 catch 块
+      - 函数不超过 200 行
+      - 所有导出函数必须有 JSDoc 注释
+    severity: warning
+
+  - name: "测试覆盖"
+    description: |
+      所有新增的导出函数必须有对应的 vitest 测试用例，
+      测试需覆盖：正常流程、边界值（null/undefined）、异常处理
+    severity: warning
+
+  - name: "变更影响"
+    description: |
+      识别以下高风险变更：
+      - Breaking Change（接口/类型签名变更）
+      - 影响核心模块的修改
+      - N+1 查询或大循环性能问题
+    severity: warning
+
+# ── 人工跳过机制 ──────────────────────────────────────────
+# CodeRabbit 原生支持以下指令（在 PR comment 中回复）：
+# @coderabbitai ignore  — 忽略当前 PR 的所有评论
+# @coderabbitai resolve — 标记所有评论为已解决
+# @coderabbitai review  — 手动触发重新审查
+
+# ── 通知配置 ──────────────────────────────────────────────
+chat:
+  auto_reply: true          # 允许在评论中和 CodeRabbit 对话
