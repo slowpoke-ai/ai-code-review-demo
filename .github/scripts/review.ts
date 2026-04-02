@@ -22,6 +22,12 @@ interface CRRules {
   notify?: {
     manual_review_reminder?: { enabled?: boolean; message?: string };
   };
+  privacy?: {
+    redact_before_send?: Array<{ pattern: string; replace: string }>;
+    redact_output?: boolean;
+    show_redaction_notice?: boolean;
+    max_file_size_chars?: number;
+  };
 }
 
 type Severity = "error" | "warning" | "info";
@@ -74,6 +80,39 @@ function loadSkippedIds(): Set<string> {
   return new Set(raw.split(/[\s,]+/).filter(Boolean));
 }
 
+
+// ─── 数据脱敏 ─────────────────────────────────────────────────────────────
+
+interface RedactResult { text: string; count: number; types: string[] }
+
+const DEFAULT_REDACT_PATTERNS = [
+  { pattern: '(?i)(password|passwd|secret|token|api_key|apikey|access_key)\\s*[=:]\\s*[^\\s]{4,}', replace: '$1 = [REDACTED]' },
+  { pattern: 'eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+', replace: '[JWT_REDACTED]' },
+  { pattern: '\\b1[3-9]\\d{9}\\b', replace: '[PHONE_REDACTED]' },
+  { pattern: '(?i)(mysql|postgres|mongodb|redis)://[^\\s]+', replace: '[DB_CONN_REDACTED]' },
+  { pattern: '\\b(192\\.168\\.|10\\.\\d+\\.)\\d+\\.\\d+\\b', replace: '[INTERNAL_IP_REDACTED]' },
+];
+
+function redactSensitiveData(text: string, rules: CRRules): RedactResult {
+  const patterns = rules.privacy?.redact_before_send ?? DEFAULT_REDACT_PATTERNS;
+  let result = text;
+  let count = 0;
+  const types: string[] = [];
+  for (const rule of patterns) {
+    try {
+      const regex = new RegExp(rule.pattern, 'gi');
+      const before = result;
+      result = result.replace(regex, rule.replace);
+      if (result !== before) {
+        count++;
+        const m = rule.replace.match(/\\[([A-Z_]+)(?:_REDACTED)?\\]/);
+        if (m) types.push(m[1]);
+      }
+    } catch { console.error('redact rule failed:', rule.pattern); }
+  }
+  if (count > 0) console.error('\u25b6 \u5df2\u8131\u654f ' + count + ' \u5904\u654f\u611f\u6570\u636e: ' + types.join(', '));
+  return { text: result, count, types };
+}
 // ─── JSON 安全解析 ────────────────────────────────────────────────────────────
 
 function safeParseJSON<T>(raw: string, fallback: T): T {
@@ -308,7 +347,8 @@ function buildInlineComments(checks: CheckItem[], skippedIds: Set<string>): Inli
 async function main() {
   const rules = loadRules();
   const skippedIds = loadSkippedIds();
-  const diff = fs.readFileSync(process.env.DIFF_PATH ?? `${os.tmpdir()}/pr.diff`, "utf8").slice(0, MAX_DIFF);
+  const rawDiff = fs.readFileSync(process.env.DIFF_PATH ?? `${os.tmpdir()}/pr.diff`, "utf8").slice(0, MAX_DIFF);
+  const { text: diff, count: redactCount, types: redactTypes } = redactSensitiveData(rawDiff, rules);
 
   if (diff.trim().length < 10) {
     fs.writeFileSync(`${os.tmpdir()}/gate_passed.txt`, "true");
