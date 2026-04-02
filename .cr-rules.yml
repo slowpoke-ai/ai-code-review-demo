@@ -1,0 +1,85 @@
+# ============================================================
+# AI Code Review 自定义规则配置
+# 放在项目根目录，review.ts 会自动读取
+# ============================================================
+
+gate:
+  threshold: 70
+  branch_overrides:
+    main: 80
+    release: 85
+    develop: 65
+    "feat/*": 60
+
+weights:
+  quality: 25
+  security: 40
+  test: 20
+  impact: 15
+
+veto:
+  enabled: true
+  rules:
+    security: 50
+    quality: 30
+
+skip:
+  paths:
+    - "**/*.md"
+    - "**/*.json"
+    - ".github/**"
+    - "docs/**"
+    - "*.lock"
+  pr_title_keywords:
+    - "[skip ci]"
+    - "[no review]"
+    - "chore:"
+    - "docs:"
+  min_diff_lines: 5
+
+quality:
+  forbidden_patterns:
+    - pattern: "console\\.log"
+      message: "生产代码中禁止使用 console.log，请使用 logger"
+      severity: medium
+    - pattern: "TODO|FIXME|HACK"
+      message: "不允许带 TODO/FIXME 的代码合并到主分支"
+      severity: medium
+    - pattern: "\\.then\\(.*\\.catch"
+      message: "建议使用 async/await 替代 Promise 链"
+      severity: low
+  requirements:
+    - "所有导出的函数必须有 JSDoc 注释"
+    - "错误处理不能使用空的 catch 块"
+    - "不允许超过 200 行的函数"
+
+security:
+  extra_checks:
+    - "所有数据库查询必须使用参数化查询，禁止字符串拼接"
+    - "密码必须使用 bcrypt 或 argon2 加密，禁止 MD5/SHA1"
+    - "JWT 必须设置过期时间，不得使用硬编码 secret"
+    - "所有用户输入必须经过验证和转义"
+    - "API 接口必须有权限校验，不允许未授权访问"
+    - "禁止在日志中打印密码、token 等敏感信息"
+  high_severity_cwe:
+    - "CWE-89"
+    - "CWE-79"
+    - "CWE-798"
+    - "CWE-95"
+    - "CWE-22"
+    - "CWE-284"
+
+test:
+  min_coverage: 80
+  require_test_for_new_functions: true
+  framework: "vitest"
+  required_scenarios:
+    - "正常流程（happy path）"
+    - "边界值（空值、null、undefined）"
+    - "异常处理（try/catch 分支）"
+
+notify:
+  manual_review_reminder:
+    enabled: true
+    score_range: [65, 75]
+    message: "⚠️ 综合评分处于临界区间，建议指定高级工程师进行人工复核"
