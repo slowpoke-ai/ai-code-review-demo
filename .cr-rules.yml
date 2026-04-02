@@ -114,3 +114,20 @@ notify:
   mention_on_high_severity:
     enabled: false
     users: ["@security-team", "@tech-lead"]
+
+# -- Privacy Protection --
+privacy:
+  redact_before_send:
+    - pattern: "(?i)(password|secret|token|api_key)\\s*[=:]\\s*[^'\"\\s]{4,}"
+      replace: "$1 = [REDACTED]"
+    - pattern: "eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+"
+      replace: "[JWT_REDACTED]"
+    - pattern: "\\b1[3-9]\\d{9}\\b"
+      replace: "[PHONE_REDACTED]"
+    - pattern: "(?i)(mysql|postgres|mongodb|redis)://[^\\s]+"
+      replace: "[DB_CONNECTION_REDACTED]"
+    - pattern: "\\b(192\\.168|10\\.)\\d+\\.\\d+\\b"
+      replace: "[INTERNAL_IP_REDACTED]"
+  redact_output: true
+  show_redaction_notice: true
+  max_file_size_chars: 5000
