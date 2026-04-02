@@ -3,21 +3,24 @@ name: AI PR Review Gate
 on:
   pull_request:
     types: [opened, synchronize, reopened]
-    paths:
-      - "src/**/*.ts"
-      - "src/**/*.tsx"
-      - "src/**/*.js"
+  issue_comment:
+    types: [created]
 
 permissions:
-  pull-requests: write   # post PR comments
-  checks: write          # create check runs
+  pull-requests: write
+  checks: write
   contents: read
 
 jobs:
   ai-review:
     name: AI Code Review
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != '' &&
+       contains(github.event.comment.body, '/skip-check'))
 
     steps:
       - uses: actions/checkout@v4
@@ -27,53 +30,125 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: .github/scripts/package-lock.json
 
-      - name: Install review deps
-        working-directory: .github/scripts
-        run: npm ci
+      - name: Install dependencies
+        run: cd .github/scripts && npm install
+
+      - name: Get PR number
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.setOutput('number', context.issue.number);
 
       - name: Get PR diff
-        id: diff
         run: |
-          git fetch origin ${{ github.base_ref }}
-          git diff origin/${{ github.base_ref }}...HEAD \
-            -- '*.ts' '*.tsx' '*.js' \
-            > /tmp/pr.diff
-          echo "lines=$(wc -l < /tmp/pr.diff)" >> $GITHUB_OUTPUT
+          git fetch origin ${{ github.base_ref || 'main' }}
+          git diff origin/${{ github.base_ref || 'main' }}...HEAD > /tmp/pr.diff
+          echo "Diff lines: $(wc -l < /tmp/pr.diff)"
 
-      - name: Run AI review
-        id: review
-        working-directory: .github/scripts
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          DIFF_PATH: /tmp/pr.diff
-          GATE_THRESHOLD: "70"
-        run: |
-          node review.js 2>&1 | tee /tmp/review_output.json
-          echo "result=$(cat /tmp/review_output.json | tail -1)" >> $GITHUB_OUTPUT
-
-      - name: Post PR comment
+      - name: Parse skip-check comments
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
+            const prNumber = parseInt('${{ steps.pr.outputs.number }}');
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const skipIds = new Set();
+            for (const comment of comments.data) {
+              const matches = comment.body.matchAll(/\/skip-check\s+([\w\s\-,]+)/g);
+              for (const match of matches) {
+                match[1].trim().split(/[\s,]+/).forEach(id => { if (id) skipIds.add(id.toUpperCase()); });
+              }
+            }
+            console.log('Skipped IDs:', [...skipIds].join(', ') || 'none');
+            fs.writeFileSync('/tmp/skip_ids.txt', [...skipIds].join('\n'));
+
+      - name: Run AI review
+        working-directory: .github/scripts
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DIFF_PATH: /tmp/pr.diff
+          SKIP_IDS_FILE: /tmp/skip_ids.txt
+          BASE_BRANCH: ${{ github.base_ref }}
+        run: node --loader ts-node/esm review.ts 2>&1
+
+      - name: Post summary comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const prNumber = parseInt('${{ steps.pr.outputs.number }}');
+            if (!fs.existsSync('/tmp/pr_comment.md')) return;
             const body = fs.readFileSync('/tmp/pr_comment.md', 'utf8');
+            const marker = '<!-- ai-review-summary -->';
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            for (const c of comments.data) {
+              if (c.body.includes(marker)) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: c.id,
+                });
+              }
+            }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
+              issue_number: prNumber,
+              body: marker + '\n' + body,
             });
+
+      - name: Post inline code comments
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const prNumber = parseInt('${{ steps.pr.outputs.number }}');
+            if (!fs.existsSync('/tmp/inline_comments.json')) return;
+            const comments = JSON.parse(fs.readFileSync('/tmp/inline_comments.json', 'utf8'));
+            if (!comments.length) { console.log('No inline comments'); return; }
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            const commitId = pr.data.head.sha;
+            const files = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            const changedFiles = new Set(files.data.map(f => f.filename));
+            const valid = comments.filter(c => changedFiles.has(c.path));
+            if (!valid.length) { console.log('No valid inline comments'); return; }
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+              commit_id: commitId,
+              event: 'COMMENT',
+              comments: valid.map(c => ({ path: c.path, line: c.line, body: c.body, side: 'RIGHT' })),
+            });
+            console.log('Posted ' + valid.length + ' inline comments');
 
       - name: Enforce gate
         run: |
-          SCORE=$(cat /tmp/gate_score.txt)
-          PASSED=$(cat /tmp/gate_passed.txt)
-          echo "Composite score: $SCORE / 100"
+          PASSED=$(cat /tmp/gate_passed.txt 2>/dev/null || echo "false")
           if [ "$PASSED" = "false" ]; then
-            echo "❌ AI review gate FAILED (score=$SCORE < threshold=70)"
+            echo "❌ AI Review Gate FAILED — 存在未解决的阻断项"
             exit 1
           fi
-          echo "✅ AI review gate PASSED (score=$SCORE)"
+          echo "✅ AI Review Gate PASSED"
