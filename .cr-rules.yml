@@ -1,0 +1,116 @@
+# ============================================================
+# AI Code Review 自定义规则配置
+# 放在项目根目录，review.ts 会自动读取
+# ============================================================
+
+# ── 卡点阈值 ──────────────────────────────────────────────
+gate:
+  threshold: 70          # 综合分低于此值阻断 Merge（0-100）
+  # 按分支设置不同阈值
+  branch_overrides:
+    main: 80             # main 分支更严格
+    release: 85          # release 分支最严格
+    develop: 65          # develop 分支宽松一些
+    "feat/*": 60         # feature 分支仅作警告参考
+
+# ── 各维度权重 ────────────────────────────────────────────
+# 四个维度权重之和建议为 100，不相等时会按比例计算
+weights:
+  quality: 25            # 代码质量
+  security: 40           # 安全漏洞（权重最高，一票否决感）
+  test: 20               # 测试覆盖
+  impact: 15             # 变更影响
+
+# ── 一票否决规则 ──────────────────────────────────────────
+# 某个维度低于此分时，不管综合分多高，直接阻断
+veto:
+  enabled: true
+  rules:
+    security: 50         # 安全分低于 50 直接 block（无论综合分）
+    quality: 30          # 代码质量极差也直接 block
+
+# ── 跳过规则 ─────────────────────────────────────────────
+skip:
+  # 这些路径的变更不触发 AI review
+  paths:
+    - "**/*.md"
+    - "**/*.json"
+    - ".github/**"
+    - "docs/**"
+    - "*.lock"
+    - "*.yml"
+  # PR 标题包含这些关键词时跳过审查
+  pr_title_keywords:
+    - "[skip ci]"
+    - "[no review]"
+    - "chore:"
+    - "docs:"
+  # 文件变更行数低于此值时跳过（纯小改动）
+  min_diff_lines: 5
+
+# ── 代码质量自定义规则 ────────────────────────────────────
+quality:
+  # 禁止使用的模式（会被标记为 high severity）
+  forbidden_patterns:
+    - pattern: "console\\.log"
+      message: "生产代码中禁止使用 console.log，请使用 logger"
+      severity: medium
+    - pattern: "TODO|FIXME|HACK"
+      message: "不允许带 TODO/FIXME 的代码合并到主分支"
+      severity: medium
+    - pattern: "any"
+      message: "TypeScript 中禁止使用 any 类型"
+      severity: low
+    - pattern: "\\.then\\(.*\\.catch"
+      message: "建议使用 async/await 替代 Promise 链"
+      severity: low
+  # 强制要求
+  requirements:
+    - "所有导出的函数必须有 JSDoc 注释"
+    - "错误处理不能使用空的 catch 块"
+    - "不允许超过 200 行的函数"
+
+# ── 安全规则 ─────────────────────────────────────────────
+security:
+  # 额外关注的安全模式（补充 AI 默认检测）
+  extra_checks:
+    - "所有数据库查询必须使用参数化查询，禁止字符串拼接"
+    - "密码必须使用 bcrypt 或 argon2 加密，禁止 MD5/SHA1"
+    - "JWT 必须设置过期时间，不得使用硬编码 secret"
+    - "所有用户输入必须经过验证和转义"
+    - "API 接口必须有权限校验，不允许未授权访问"
+    - "禁止在日志中打印密码、token、身份证号等敏感信息"
+  # 以下 CWE 类型直接判定为 high severity
+  high_severity_cwe:
+    - "CWE-89"   # SQL 注入
+    - "CWE-79"   # XSS
+    - "CWE-798"  # 硬编码凭据
+    - "CWE-95"   # 代码注入 / eval
+    - "CWE-22"   # 路径遍历
+    - "CWE-284"  # 访问控制缺失
+
+# ── 测试规则 ─────────────────────────────────────────────
+test:
+  # 要求的最低覆盖率（结合 Codecov 使用）
+  min_coverage: 80
+  # 新增函数必须有对应测试
+  require_test_for_new_functions: true
+  # 测试框架偏好（提示 AI 生成对应风格的测试建议）
+  framework: "vitest"     # jest | vitest | mocha
+  # 必须测试的场景
+  required_scenarios:
+    - "正常流程（happy path）"
+    - "边界值（空值、null、undefined）"
+    - "异常处理（try/catch 分支）"
+
+# ── 通知规则 ─────────────────────────────────────────────
+notify:
+  # 评分在这个范围内时，PR comment 里额外附加人工 Review 提醒
+  manual_review_reminder:
+    enabled: true
+    score_range: [65, 75]  # 处于灰色地带时提醒
+    message: "⚠️ 综合评分处于临界区间，建议指定高级工程师进行人工复核"
+  # 特定 severity 出现时 @ 相关人员
+  mention_on_high_severity:
+    enabled: false
+    users: ["@security-team", "@tech-lead"]
