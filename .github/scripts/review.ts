@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "js-yaml";
+import * as os from "os";
 
 // ─── 类型定义 ─────────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ function loadRules(): CRRules {
 // ─── 读取人工跳过的 ID ────────────────────────────────────────────────────────
 
 function loadSkippedIds(): Set<string> {
-  const skipFile = process.env.SKIP_IDS_FILE ?? "/tmp/skip_ids.txt";
+  const skipFile = process.env.SKIP_IDS_FILE ?? `${os.tmpdir()}/skip_ids.txt`;
   if (!fs.existsSync(skipFile)) return new Set();
   const raw = fs.readFileSync(skipFile, "utf8").trim();
   return new Set(raw.split(/[\s,]+/).filter(Boolean));
@@ -307,12 +308,12 @@ function buildInlineComments(checks: CheckItem[], skippedIds: Set<string>): Inli
 async function main() {
   const rules = loadRules();
   const skippedIds = loadSkippedIds();
-  const diff = fs.readFileSync(process.env.DIFF_PATH ?? "/tmp/pr.diff", "utf8").slice(0, MAX_DIFF);
+  const diff = fs.readFileSync(process.env.DIFF_PATH ?? `${os.tmpdir()}/pr.diff`, "utf8").slice(0, MAX_DIFF);
 
   if (diff.trim().length < 10) {
-    fs.writeFileSync("/tmp/gate_passed.txt", "true");
-    fs.writeFileSync("/tmp/pr_comment.md", "_无代码变更，跳过审查_");
-    fs.writeFileSync("/tmp/inline_comments.json", "[]");
+    fs.writeFileSync(`${os.tmpdir()}/gate_passed.txt`, "true");
+    fs.writeFileSync(`${os.tmpdir()}/pr_comment.md`, "_无代码变更，跳过审查_");
+    fs.writeFileSync(`${os.tmpdir()}/inline_comments.json`, "[]");
     return;
   }
 
@@ -333,9 +334,9 @@ async function main() {
   const passed = blockers.length === 0;
 
   const result: ReviewResult = { checks: allChecks, passed, blockers, warnings };
-  fs.writeFileSync("/tmp/pr_comment.md", buildSummaryComment(result, skippedIds));
-  fs.writeFileSync("/tmp/inline_comments.json", JSON.stringify(buildInlineComments(allChecks, skippedIds), null, 2));
-  fs.writeFileSync("/tmp/gate_passed.txt", String(passed));
+  fs.writeFileSync(`${os.tmpdir()}/pr_comment.md`, buildSummaryComment(result, skippedIds));
+  fs.writeFileSync(`${os.tmpdir()}/inline_comments.json`, JSON.stringify(buildInlineComments(allChecks, skippedIds), null, 2));
+  fs.writeFileSync(`${os.tmpdir()}/gate_passed.txt`, String(passed));
 
   console.log(JSON.stringify({ passed, total: allChecks.length, blockers: blockers.length, warnings: warnings.length, skipped: skippedIds.size }));
 }
